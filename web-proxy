@@ -1,0 +1,15 @@
+http_proxy = "http://127.0.0.1:50173"
+https_proxy = "http://127.0.0.1:50173"
+
+[[servers]]
+listen = "127.0.0.1:3000"
+
+[[servers.routes]]
+location = "rust-static"
+proxy_pass = "https://mirrors.ustc.edu.cn/rust-static"
+cached = "cache/rust-static"
+
+[[servers.routes]]
+location = "rust-static/rustup"
+proxy_pass = "https://mirrors.ustc.edu.cn/rust-static/rustup"
+cached = "cache/rust-static/rustup"
