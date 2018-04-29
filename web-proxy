@@ -10,6 +10,6 @@ proxy_pass = "https://mirrors.ustc.edu.cn/rust-static"
 cached = "cache/rust-static"
 
 [[servers.routes]]
-location = "rust-static/rustup"
-proxy_pass = "https://mirrors.ustc.edu.cn/rust-static/rustup"
-cached = "cache/rust-static/rustup"
+location = "npm"
+proxy_pass = "https://registry.npm.taobao.org"
+cached = "cache/mpn"

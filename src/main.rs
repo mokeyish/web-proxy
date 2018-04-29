@@ -186,18 +186,12 @@ struct RouteConf {
 }
 
 fn load_config() -> Option<RootConf> {
-    // 给所需的文件创建一个路径
     let path = Path::new("web-proxy");
     let display = path.display();
-
-    // 以只读方式打开路径，返回 `io::Result<File>`
     let mut file = match File::open(&path) {
-        // `io::Error` 的 `description` 方法返回一个描述错误的字符串。
         Err(why) => panic!("couldn't open {}: {}", display, why.description()),
         Ok(file) => file,
     };
-
-    // 读取文件内容到一个字符串，返回 `io::Result<usize>`
     let mut s = String::new();
     match file.read_to_string(&mut s) {
         Err(why) => panic!("couldn't read {}: {}", display, why.description()),
