@@ -41,9 +41,6 @@ struct WebProxyService {
 
 impl WebProxyService {
     fn handle(&self, req: Request) -> Response {
-        println!("请求路径:{}", req.path());
-        println!("请求头:{}", req.headers());
-
         for route in &self.server_conf.routes {
             let location = format!("/{}", route.location);
             if !(req.path().starts_with(location.as_str())) {
@@ -59,9 +56,6 @@ impl WebProxyService {
                 let mut headers: Headers = Headers::new();
                 let cached_path = if let Some(ref root_cache_path) = route.cached {
                     let cached_path = PathBuf::from_iter([root_cache_path.as_str(), path.as_str().trim_left_matches("/")].iter());
-                    println!("根缓存路径:{}", root_cache_path);
-                    println!("相对缓存路径:{}", path);
-                    println!("缓存路径:{:?}", cached_path);
                     if cached_path.exists() && cached_path.is_file() {
 
                         let last_modify: DateTime<Utc> = DateTime::from(fs::metadata(cached_path.as_path()).unwrap().modified().unwrap());
@@ -106,7 +100,6 @@ impl WebProxyService {
                             }
                             StatusCode::Ok => {
                                 println!("read from http body");
-                                // 读取数据
                                 let mut data = Vec::new();
                                 res.copy_to(&mut data).unwrap();
                                 if let Some(ref _cached) = route.cached {
@@ -114,11 +107,11 @@ impl WebProxyService {
                                     // If-Modified-Since
                                     if let Some(t) = res.headers().get_raw("Last-Modified") {
                                         let last_modified = String::from_utf8(t.one().unwrap().to_vec()).unwrap();
-                                        let m = parse_to_date_time(last_modified.as_str()).unwrap();
+                                        let last_modified = HttpDate::from_str(last_modified.as_str()).ok().and_then(|x|Some(SystemTime::from(x))).unwrap();
+
                                         if let Some(cached_path) = cached_path {
-                                            write_to_file(cached_path.as_path(), m, data.as_ref());
+                                            write_to_file(cached_path.as_path(), last_modified, data.as_ref());
                                         }
-                                        println!("上次更改时间是:{:?}", m);
                                     }
                                 }
                                 Response::new()
@@ -126,7 +119,7 @@ impl WebProxyService {
                                     .with_body(data)
                             },
                             StatusCode::NotFound =>Response::new().with_status(StatusCode::NotFound),
-                            _ => panic!("未知的错误")
+                            _ => panic!("Unknown error")
                         }
                     }
                     Err(e) => {
@@ -155,16 +148,10 @@ impl Service for WebProxyService {
     // resolve to. This can change to whatever Future you need.
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
-
     fn call(&self, req: Request) -> Self::Future {
-        // We're currently ignoring the Request
-        // And returning an 'ok' Future, which means it's ready
-        // immediately, and build a Response with the 'PHRASE' body.
         Box::new(futures::future::ok(self.handle(req)))
     }
 }
-
-//quick_main!(run);
 
 fn write_to_file(file: &Path, time_stamp: SystemTime, data: &[u8]) {
     let parent = file.parent().unwrap();
@@ -173,22 +160,15 @@ fn write_to_file(file: &Path, time_stamp: SystemTime, data: &[u8]) {
     }
     {
         let display = file.display();
-        let mut file = match File::create(&file) {
-            Err(why) => panic!("couldn't create {}: {}", display, why.description()),
-            Ok(file) => file,
-        };
-
-        match file.write_all(data) {
-            Err(why) => panic!("couldn't write to {}: {}", display, why.description()),
-            Ok(_) => println!("successfully cached {}", display),
+        if file.exists() {
+            fs::remove_file(file).expect("delete file failed.");
         }
+        File::create(&file)
+            .unwrap_or_else(|why|panic!("couldn't create {}: {}", display, why.description()))
+            .write_all(data).unwrap_or_else(|why|panic!("couldn't write to {}: {}", display, why.description()));
     }
     let time_stamp = filetime::FileTime::from_system_time(time_stamp);
     filetime::set_file_times(file, time_stamp, time_stamp).expect("set modified time failed.");
-}
-
-fn parse_to_date_time(data_str: &str) -> Option<SystemTime> {
-    HttpDate::from_str(data_str).ok().and_then(|x|Some(SystemTime::from(x)))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
