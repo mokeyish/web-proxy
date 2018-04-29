@@ -8,6 +8,7 @@ extern crate chrono;
 extern crate byteorder;
 extern crate toml;
 extern crate serde;
+extern crate filetime;
 #[macro_use]
 extern crate serde_derive;
 
@@ -28,7 +29,7 @@ use std::convert::From;
 use std::time::SystemTime;
 use std::iter::FromIterator;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, FixedOffset, TimeZone, Utc, NaiveDateTime};
+use chrono::prelude::*;
 
 
 struct WebProxyService {
@@ -56,25 +57,14 @@ impl WebProxyService {
                 let url = format!("{}{}", route.proxy_pass, path);
 
                 let mut headers: Headers = Headers::new();
-                let mut cached_file = None;
                 let cached_path = if let Some(ref root_cache_path) = route.cached {
                     let cached_path = PathBuf::from_iter([root_cache_path.as_str(), path.as_str().trim_left_matches("/")].iter());
                     println!("根缓存路径:{}", root_cache_path);
                     println!("相对缓存路径:{}", path);
                     println!("缓存路径:{:?}", cached_path);
                     if cached_path.exists() && cached_path.is_file() {
-                        let display = cached_path.display().to_string();
-                        let mut file = match File::open(cached_path.as_path()) {
-                            // `io::Error` 的 `description` 方法返回一个描述错误的字符串。
-                            Err(why) => panic!("couldn't open {}: {}", display, why.description()),
-                            Ok(file) => file,
-                        };
-                        let time_stamp = file.read_i64::<LittleEndian>().unwrap_or_else(|e| {
-                            println!("读取时间戳失败:{}", e.description());
-                            Utc::now().timestamp()
-                        });
-                        let last_modify = NaiveDateTime::from_timestamp(time_stamp, 0);
-                        cached_file = Some(file);
+
+                        let last_modify: DateTime<Utc> = DateTime::from(fs::metadata(cached_path.as_path()).unwrap().modified().unwrap());
                         println!("If-Modified-Since");
                         headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
                     }
@@ -91,26 +81,31 @@ impl WebProxyService {
                 if let Some(ref p) = self.https_proxy {
                     client_builder.proxy(p.clone());
                 }
-                println!("访问上级");
                 match client_builder.build().unwrap().get(url.as_str()).headers(headers).send() {
                     Ok(mut res) => {
-                        println!("代理:Path: {}", res.url().as_str());
-                        println!("代理:Status: {}", res.status());
-                        println!("代理:Headers:\n{}", res.headers());
+                        println!("proxy_pass:Path: {}", res.url().as_str());
+                        println!("proxy_pass:Status: {}", res.status());
+                        println!("proxy_pass:Headers:\n{}", res.headers());
                         match res.status() {
                             StatusCode::NotModified => {
                                 // 读取缓存
-                                println!("读取缓存");
-
+                                println!("read from cache");
+                                let cached_path = cached_path.unwrap();
+                                let display = cached_path.display().to_string();
+                                let mut file = match File::open(cached_path.as_path()) {
+                                    // `io::Error` 的 `description` 方法返回一个描述错误的字符串。
+                                    Err(why) => panic!("couldn't open {}: {}", display, why.description()),
+                                    Ok(file) => file,
+                                };
                                 let mut data = Vec::new();
-                                cached_file.unwrap().read_to_end(&mut data).unwrap();
+                                file.read_to_end(&mut data).unwrap();
                                 println!("从缓存读取文件");
                                 Response::new()
                                     .with_headers(res.headers().clone())
                                     .with_body(data)
                             }
                             StatusCode::Ok => {
-                                println!("读取数据");
+                                println!("read from http body");
                                 // 读取数据
                                 let mut data = Vec::new();
                                 res.copy_to(&mut data).unwrap();
@@ -121,7 +116,7 @@ impl WebProxyService {
                                         let last_modified = String::from_utf8(t.one().unwrap().to_vec()).unwrap();
                                         let m = parse_to_date_time(last_modified.as_str()).unwrap();
                                         if let Some(cached_path) = cached_path {
-                                            write_to_file(cached_path.as_path(), m.timestamp(), data.as_ref());
+                                            write_to_file(cached_path.as_path(), m, data.as_ref());
                                         }
                                         println!("上次更改时间是:{:?}", m);
                                     }
@@ -129,7 +124,8 @@ impl WebProxyService {
                                 Response::new()
                                     .with_headers(res.headers().clone())
                                     .with_body(data)
-                            }
+                            },
+                            StatusCode::NotFound =>Response::new().with_status(StatusCode::NotFound),
                             _ => panic!("未知的错误")
                         }
                     }
@@ -170,27 +166,29 @@ impl Service for WebProxyService {
 
 //quick_main!(run);
 
-fn write_to_file(file: &Path, time_stamp: i64, data: &[u8]) {
+fn write_to_file(file: &Path, time_stamp: SystemTime, data: &[u8]) {
     let parent = file.parent().unwrap();
     if !(parent.exists()) {
         let _ = fs::create_dir_all(parent).unwrap();
     }
-    let display = file.display();
+    {
+        let display = file.display();
+        let mut file = match File::create(&file) {
+            Err(why) => panic!("couldn't create {}: {}", display, why.description()),
+            Ok(file) => file,
+        };
 
-    let mut file = match File::create(&file) {
-        Err(why) => panic!("couldn't create {}: {}", display, why.description()),
-        Ok(file) => file,
-    };
-
-    file.write_i64::<LittleEndian>(time_stamp).expect("write time stamp failed.");
-    match file.write_all(data) {
-        Err(why) => panic!("couldn't write to {}: {}", display, why.description()),
-        Ok(_) => println!("successfully cached {}", display),
+        match file.write_all(data) {
+            Err(why) => panic!("couldn't write to {}: {}", display, why.description()),
+            Ok(_) => println!("successfully cached {}", display),
+        }
     }
+    let time_stamp = filetime::FileTime::from_system_time(time_stamp);
+    filetime::set_file_times(file, time_stamp, time_stamp).expect("set modified time failed.");
 }
 
-fn parse_to_date_time(data_str: &str) -> Result<DateTime<Utc>, hyper::Error> {
-    Ok(DateTime::<Utc>::from(SystemTime::from(HttpDate::from_str(data_str)?)))
+fn parse_to_date_time(data_str: &str) -> Option<SystemTime> {
+    HttpDate::from_str(data_str).ok().and_then(|x|Some(SystemTime::from(x)))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
