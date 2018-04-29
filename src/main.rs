@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 extern crate reqwest;
 extern crate hyper;
@@ -17,19 +15,17 @@ use futures::future::Future;
 use hyper::StatusCode;
 use hyper::server::{Http, Request, Response, Service};
 use hyper::header::{HttpDate, Headers, ContentLength};
+use chrono::prelude::*;
 
 use std::error::Error;
 use std::str::FromStr;
 use std::fs;
-use std::fs::{File, Metadata};
+use std::fs::{File};
 use std::path::{Path, PathBuf};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Write, Read};
 use std::convert::From;
 use std::time::SystemTime;
 use std::iter::FromIterator;
-use serde::{Deserialize, Serialize};
-use chrono::prelude::*;
 
 
 struct WebProxyService {
@@ -47,8 +43,8 @@ impl WebProxyService {
                 continue;
             };
             return  {
-                // 文本 application/xml
-                // 文件资源 application/x-tar
+                // text resource application/xml
+                // binary resource application/x-tar
                 let path = req.path().to_string()[location.len()..].to_string();
 
                 let url = format!("{}{}", route.proxy_pass, path);
@@ -57,9 +53,7 @@ impl WebProxyService {
                 let cached_path = if let Some(ref root_cache_path) = route.cached {
                     let cached_path = PathBuf::from_iter([root_cache_path.as_str(), path.as_str().trim_left_matches("/")].iter());
                     if cached_path.exists() && cached_path.is_file() {
-
                         let last_modify: DateTime<Utc> = DateTime::from(fs::metadata(cached_path.as_path()).unwrap().modified().unwrap());
-                        println!("If-Modified-Since");
                         headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
                     }
                     Some(cached_path)
@@ -82,18 +76,15 @@ impl WebProxyService {
                         println!("proxy_pass:Headers:\n{}", res.headers());
                         match res.status() {
                             StatusCode::NotModified => {
-                                // 读取缓存
                                 println!("read from cache");
                                 let cached_path = cached_path.unwrap();
                                 let display = cached_path.display().to_string();
                                 let mut file = match File::open(cached_path.as_path()) {
-                                    // `io::Error` 的 `description` 方法返回一个描述错误的字符串。
                                     Err(why) => panic!("couldn't open {}: {}", display, why.description()),
                                     Ok(file) => file,
                                 };
                                 let mut data = Vec::new();
                                 file.read_to_end(&mut data).unwrap();
-                                println!("从缓存读取文件");
                                 Response::new()
                                     .with_headers(res.headers().clone())
                                     .with_body(data)
