@@ -3,6 +3,7 @@ https_proxy = "http://127.0.0.1:50173"
 [[servers]]
 listen = "127.0.0.1:3000"
 cached = "./cache"
+url_replace_mime = ["application/json"]
 replace_base_url = "http://127.0.0.1:3000"
 
 [[servers.routes]]

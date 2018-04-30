@@ -105,8 +105,8 @@ impl WebProxyService {
                         // replace url
                         if let Some(content_type) = res.headers().get_raw("Content-Type") {
                             let content_type = String::from_utf8(content_type.one().unwrap().to_vec()).unwrap();
-                            match content_type.as_str() {
-                                "application/json" | "" => {
+                            if let Some(ref mime_types) = self.server_conf.url_replace_mime {
+                                if mime_types.iter().any(|x| x  == &content_type) {
                                     let mut tmp = String::from_utf8(data).unwrap();
                                     if let Some(ref replaces) = route.text_replace {
                                         for i in replaces {
@@ -124,8 +124,7 @@ impl WebProxyService {
                                     }
 
                                     data = tmp.into_bytes();
-                                },
-                                _ => ()
+                                }
                             }
                         };
 
@@ -236,6 +235,7 @@ struct ServerConf {
     https_proxy: Option<String>,
     cached: Option<String>,
     replace_base_url: Option<String>,
+    url_replace_mime: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
