@@ -53,6 +53,74 @@ struct WebProxyService {
 }
 
 impl WebProxyService {
+    fn cache_file(&self, file: &Path, time_stamp: SystemTime, data: &[u8]) {
+        let parent = file.parent().unwrap();
+        if !(parent.exists()) {
+            let _ = fs::create_dir_all(parent).unwrap();
+        }
+        {
+            let display = file.display();
+            if file.exists() {
+                fs::remove_file(file).expect("delete file failed.");
+            }
+            File::create(&file)
+                .unwrap_or_else(|why|panic!("couldn't create {}: {}", display, why.description()))
+                .write_all(data).unwrap_or_else(|why|panic!("couldn't write to {}: {}", display, why.description()));
+        }
+        let time_stamp = filetime::FileTime::from_system_time(time_stamp);
+        filetime::set_file_times(file, time_stamp, time_stamp).expect("set modified time failed.");
+    }
+
+    fn read_from_cache(&self, cached_path: PathBuf, mut headers: Headers) -> Response {
+        println!("read from cache");
+        let display = cached_path.display().to_string();
+        let mut file = match File::open(cached_path.as_path()) {
+            Err(why) => panic!("couldn't open {}: {}", display, why.description()),
+            Ok(file) => file,
+        };
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        let mime = cached_path.extension().and_then(|x|Some(mime_types::get_mime_type(x.to_str().unwrap_or(".")))).unwrap_or(mime::APPLICATION_OCTET_STREAM);
+        headers.set_raw("Content-Type", mime.to_string());
+        headers.set(ContentLength(data.len() as u64));
+        Response::new().with_headers(headers).with_body(data)
+    }
+
+    fn replace_text(&self, req: Request, res: &reqwest::Response, route: &RouteConf, data: Vec<u8>) -> Vec<u8> {
+        if let Some(content_type) = res.headers().get_raw("Content-Type") {
+            let content_type = String::from_utf8(content_type.one().unwrap().to_vec()).unwrap();
+            if let Some(ref mime_types) = self.server_conf.url_replace_mime {
+                if mime_types.iter().any(|x| x  == &content_type) {
+                    let mut tmp = String::from_utf8(data).unwrap();
+                    if let Some(ref replaces) = route.text_replace {
+                        for i in replaces {
+                            tmp = tmp.replace(i[0].as_str(), i[1].as_str());
+                        }
+                    }
+                    let host = req.headers().get::<Host>().unwrap();
+                    let from = route.proxy_pass.as_str();
+                    let to = format!("http://{}:{}/{}", host.hostname(), host.port().unwrap_or(80), route.location);
+                    tmp = tmp.replace(from, to.as_str());
+                    let url_regex: &Regex = &URL_REGEX;
+                    // replace all url
+                    if let Some(base_url) = &self.server_conf.replace_base_url {
+                        tmp = url_regex.replace_all(tmp.as_str(), |caps: &Captures|format!("{}/@?proxy={}", base_url, encode(&caps["url"]))).to_string();
+                        let a_href: &Regex = &A_HREF;
+                        tmp = a_href.replace_all(tmp.as_str(), |x: &Captures| {
+                            let all = x.name("a").unwrap();
+                            let mut replace = all.as_str().to_string();
+                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
+                            replace
+                        }).to_string();
+                    }
+
+                    return  tmp.into_bytes();
+                }
+            }
+        }
+        data
+    }
+
     fn handle_route(&self, req: Request, route: &RouteConf) -> Response {
         // text resource application/xml
         // binary resource application/x-tar
@@ -99,59 +167,14 @@ impl WebProxyService {
                 println!("proxy_pass:Status: {}", res.status());
                 println!("proxy_pass:Headers:\n{}", res.headers());
                 match res.status() {
-                    StatusCode::NotModified => {
-                        println!("read from cache");
-                        let cached_path = cached_path.unwrap();
-                        let display = cached_path.display().to_string();
-                        let mut file = match File::open(cached_path.as_path()) {
-                            Err(why) => panic!("couldn't open {}: {}", display, why.description()),
-                            Ok(file) => file,
-                        };
-                        let mut data = Vec::new();
-                        file.read_to_end(&mut data).unwrap();
-                        let mime = cached_path.extension().and_then(|x|Some(mime_types::get_mime_type(x.to_str().unwrap_or(".")))).unwrap_or(mime::APPLICATION_OCTET_STREAM);
-                        let mut headers: Headers = res.headers().clone();
-                        headers.set_raw("Content-Type", mime.to_string());
-                        headers.set(ContentLength(data.len() as u64));
-                        Response::new().with_headers(headers).with_body(data)
-                    }
+                    StatusCode::NotModified => self.read_from_cache(cached_path.unwrap(), res.headers().clone()),
                     StatusCode::Ok => {
                         println!("read from http body");
                         let mut data = Vec::new();
                         res.copy_to(&mut data).unwrap();
 
                         // replace url
-                        if let Some(content_type) = res.headers().get_raw("Content-Type") {
-                            let content_type = String::from_utf8(content_type.one().unwrap().to_vec()).unwrap();
-                            if let Some(ref mime_types) = self.server_conf.url_replace_mime {
-                                if mime_types.iter().any(|x| x  == &content_type) {
-                                    let mut tmp = String::from_utf8(data).unwrap();
-                                    if let Some(ref replaces) = route.text_replace {
-                                        for i in replaces {
-                                            tmp = tmp.replace(i[0].as_str(), i[1].as_str());
-                                        }
-                                    }
-                                    let host = req.headers().get::<Host>().unwrap();
-                                    let from = route.proxy_pass.as_str();
-                                    let to = format!("http://{}:{}/{}", host.hostname(), host.port().unwrap_or(80), route.location);
-                                    tmp = tmp.replace(from, to.as_str());
-                                    let url_regex: &Regex = &URL_REGEX;
-                                    // replace all url
-                                    if let Some(base_url) = &self.server_conf.replace_base_url {
-                                        tmp = url_regex.replace_all(tmp.as_str(), |caps: &Captures|format!("{}/@?proxy={}", base_url, encode(&caps["url"]))).to_string();
-                                        let a_href: &Regex = &A_HREF;
-                                        tmp = a_href.replace_all(tmp.as_str(), |x: &Captures| {
-                                            let all = x.name("a").unwrap();
-                                            let mut replace = all.as_str().to_string();
-                                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
-                                            replace
-                                        }).to_string();
-                                    }
-
-                                    data = tmp.into_bytes();
-                                }
-                            }
-                        };
+                        data = self.replace_text(req,&res, route, data);
 
                         if let Some(ref mut cached_path) = cached_path {
                             // Last-Modified
@@ -167,7 +190,7 @@ impl WebProxyService {
                                     }
                                 }
 
-                                write_to_file(cached_path.as_path(), last_modified, data.as_ref());
+                                self.cache_file(cached_path.as_path(), last_modified, data.as_ref());
                             }
                         };
                         let mut headers: Headers = res.headers().clone();
@@ -180,10 +203,15 @@ impl WebProxyService {
                 }
             }
             Err(e) => {
-                let msg = e.to_string();
-                Response::new()
-                    .with_header(ContentLength(msg.len() as u64))
-                    .with_body(msg)
+                // try read from cache
+                if let Some(cached_path) = cached_path {
+                    if cached_path.exists() &&cached_path.is_file(){
+                        return self.read_from_cache(cached_path, Headers::new());
+                    }
+
+                }
+                let mut msg = e.to_string();
+                Response::new().with_header(ContentLength(msg.len() as u64)).with_body(msg)
             }
         }
 
@@ -214,9 +242,7 @@ impl WebProxyService {
 
         // proxy others
         let msg = format!("others ");
-        Response::new()
-            .with_header(ContentLength(msg.len() as u64))
-            .with_body(msg)
+        Response::new().with_header(ContentLength(msg.len() as u64)).with_body(msg)
     }
 }
 
@@ -233,24 +259,6 @@ impl Service for WebProxyService {
         println!("origin path:{}", req.path());
         Box::new(futures::future::ok(self.handle(req)))
     }
-}
-
-fn write_to_file(file: &Path, time_stamp: SystemTime, data: &[u8]) {
-    let parent = file.parent().unwrap();
-    if !(parent.exists()) {
-        let _ = fs::create_dir_all(parent).unwrap();
-    }
-    {
-        let display = file.display();
-        if file.exists() {
-            fs::remove_file(file).expect("delete file failed.");
-        }
-        File::create(&file)
-            .unwrap_or_else(|why|panic!("couldn't create {}: {}", display, why.description()))
-            .write_all(data).unwrap_or_else(|why|panic!("couldn't write to {}: {}", display, why.description()));
-    }
-    let time_stamp = filetime::FileTime::from_system_time(time_stamp);
-    filetime::set_file_times(file, time_stamp, time_stamp).expect("set modified time failed.");
 }
 
 #[derive(Debug, Deserialize, Serialize)]

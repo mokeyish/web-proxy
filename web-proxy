@@ -1,5 +1,5 @@
-http_proxy = "http://127.0.0.1:50173"
-https_proxy = "http://127.0.0.1:50173"
+http_proxy = "http://127.0.0.1:5017"
+https_proxy = "http://127.0.0.1:5017"
 [[servers]]
 listen = "127.0.0.1:3000"
 cached = "./cache"
