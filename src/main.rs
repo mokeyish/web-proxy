@@ -38,7 +38,7 @@ use std::time::SystemTime;
 use std::iter::FromIterator;
 
 lazy_static! {
-        static ref URL_REGEX: Regex = Regex::new(r"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[\S]*|/?))").unwrap();
+        static ref URL_REGEX: Regex = Regex::new(r#"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[^\s"\\]*|/?))"#).unwrap();
 }
 
 
