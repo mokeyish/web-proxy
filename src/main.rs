@@ -1,5 +1,5 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
+//#![allow(unused_imports)]
+//#![allow(dead_code)]
 
 extern crate reqwest;
 extern crate hyper;
@@ -19,6 +19,9 @@ extern crate serde_derive;
 extern crate lazy_static;
 
 mod mime_types;
+mod conf;
+
+use conf::{ServerConf, RouteConf};
 
 
 use futures::future::Future;
@@ -216,6 +219,7 @@ impl WebProxyService {
         }
 
     }
+
     fn handle(&self, req: Request) -> Response {
         if req.path() == "/@" && req.query().is_some() {
             let query_str = req.query().unwrap().to_string();
@@ -261,65 +265,13 @@ impl Service for WebProxyService {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct RootConf {
-    http_proxy: Option<String>,
-    https_proxy: Option<String>,
-    servers: Vec<ServerConf>,
-    cached: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ServerConf {
-    listen: String,
-    server_name: Option<String>,
-    routes: Vec<RouteConf>,
-    http_proxy: Option<String>,
-    https_proxy: Option<String>,
-    cached: Option<String>,
-    replace_base_url: Option<String>,
-    url_replace_mime: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct RouteConf {
-    location: String,
-    proxy_pass: String,
-    index: Option<Vec<String>>,
-    text_replace: Option<Vec<[String;2]>>,
-}
-
-fn load_config() -> RootConf {
-    let path = Path::new("web-proxy");
-    let display = path.display();
-    let mut file = match File::open(&path) {
-        Err(why) => panic!("couldn't open {}: {}", display, why.description()),
-        Ok(file) => file,
-    };
-    let mut s = String::new();
-    match file.read_to_string(&mut s) {
-        Err(why) => panic!("couldn't read {}: {}", display, why.description()),
-        Ok(_) => (),
-    };
-    toml::from_str(s.as_str()).ok().and_then(|mut root_conf: RootConf| {
-        for i in 0..root_conf.servers.len() {
-            if root_conf.servers[i].https_proxy.is_none() {
-                root_conf.servers[i].https_proxy =  root_conf.https_proxy.clone();
-            }
-            if root_conf.servers[i].http_proxy.is_none() {
-                root_conf.servers[i].http_proxy =  root_conf.http_proxy.clone();
-            }
-        }
-        Some(root_conf)
-    }).expect("parse config error.")
-}
 
 fn default_files() -> Vec<String> {
     vec!["index.html".to_string()]
 }
 
 fn main() {
-    let conf = load_config();
+    let conf = conf::load_config();
     if conf.servers.len() != 1 {
         println!("currently just support one server.");
         return;
