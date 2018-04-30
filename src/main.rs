@@ -108,11 +108,10 @@ impl WebProxyService {
                         let mut data = Vec::new();
                         file.read_to_end(&mut data).unwrap();
                         let mime = cached_path.extension().and_then(|x|Some(mime_types::get_mime_type(x.to_str().unwrap_or(".")))).unwrap_or(mime::APPLICATION_OCTET_STREAM);
-                        let mut headers = res.headers().clone();
+                        let mut headers: Headers = res.headers().clone();
                         headers.set_raw("Content-Type", mime.to_string());
-                        Response::new()
-                            .with_headers(headers)
-                            .with_body(data)
+                        headers.set(ContentLength(data.len() as u64));
+                        Response::new().with_headers(headers).with_body(data)
                     }
                     StatusCode::Ok => {
                         println!("read from http body");
@@ -162,9 +161,10 @@ impl WebProxyService {
                                 write_to_file(cached_path.as_path(), last_modified, data.as_ref());
                             }
                         };
-                        Response::new()
-                            .with_headers(res.headers().clone()).with_header(ContentLength(data.len() as u64))
-                            .with_body(data)
+                        let mut headers: Headers = res.headers().clone();
+                        headers.set(ContentLength(data.len() as u64)); // Transfer-Encoding
+                        headers.remove_raw("Transfer-Encoding");
+                        Response::new().with_headers(headers).with_body(data)
                     },
                     StatusCode::NotFound =>Response::new().with_status(StatusCode::NotFound),
                     _ => panic!("Unknown error")
