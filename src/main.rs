@@ -12,10 +12,13 @@ extern crate filetime;
 extern crate url;
 extern crate regex;
 extern crate base64;
+extern crate mime;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate lazy_static;
+
+mod mime_types;
 
 
 use futures::future::Future;
@@ -104,8 +107,11 @@ impl WebProxyService {
                         };
                         let mut data = Vec::new();
                         file.read_to_end(&mut data).unwrap();
+                        let mime = cached_path.extension().and_then(|x|Some(mime_types::get_mime_type(x.to_str().unwrap_or(".")))).unwrap_or(mime::APPLICATION_OCTET_STREAM);
+                        let mut headers = res.headers().clone();
+                        headers.set_raw("Content-Type", mime.to_string());
                         Response::new()
-                            .with_headers(res.headers().clone())
+                            .with_headers(headers)
                             .with_body(data)
                     }
                     StatusCode::Ok => {
@@ -296,7 +302,6 @@ fn default_files() -> Vec<String> {
 }
 
 fn main() {
-
     let conf = load_config();
     if conf.servers.len() != 1 {
         println!("currently just support one server.");
