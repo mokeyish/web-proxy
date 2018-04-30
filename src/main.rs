@@ -41,7 +41,9 @@ use std::time::SystemTime;
 use std::iter::FromIterator;
 
 lazy_static! {
-        static ref URL_REGEX: Regex = Regex::new(r#"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[^\s"\\]*|/?))"#).unwrap();
+static ref URL_REGEX: Regex = Regex::new(r#"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[^\s"\\]*|/?))"#).unwrap();
+
+static ref  A_HREF: Regex = Regex::new(r#"(?P<a><a\s+(?:[^>]*?\s+)?href=["'](?P<absolute_path>/(.*?))["']>.+</a>)"#).unwrap();
 }
 
 
@@ -131,12 +133,19 @@ impl WebProxyService {
                                     }
                                     let host = req.headers().get::<Host>().unwrap();
                                     let from = route.proxy_pass.as_str();
-                                    let to = format!("http://{}:{}/{}", host.hostname(), host.port().unwrap_or(80),route.location);
+                                    let to = format!("http://{}:{}/{}", host.hostname(), host.port().unwrap_or(80), route.location);
                                     tmp = tmp.replace(from, to.as_str());
                                     let url_regex: &Regex = &URL_REGEX;
                                     // replace all url
                                     if let Some(base_url) = &self.server_conf.replace_base_url {
                                         tmp = url_regex.replace_all(tmp.as_str(), |caps: &Captures|format!("{}/@?proxy={}", base_url, encode(&caps["url"]))).to_string();
+                                        let a_href: &Regex = &A_HREF;
+                                        tmp = a_href.replace_all(tmp.as_str(), |x: &Captures| {
+                                            let all = x.name("a").unwrap();
+                                            let mut replace = all.as_str().to_string();
+                                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path());
+                                            replace
+                                        }).to_string();
                                     }
 
                                     data = tmp.into_bytes();
