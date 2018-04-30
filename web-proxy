@@ -3,7 +3,7 @@ https_proxy = "http://127.0.0.1:50173"
 [[servers]]
 listen = "127.0.0.1:3000"
 cached = "./cache"
-url_replace_mime = ["application/json"]
+url_replace_mime = ["application/json", "text/html"]
 replace_base_url = "http://127.0.0.1:3000"
 
 [[servers.routes]]
@@ -27,3 +27,8 @@ proxy_pass = "https://api-v2v3search-ea.nuget.org/query"
 [[servers.routes]]
 location = "/nuget/dotnet-core"
 proxy_pass = "https://dotnet.myget.org/F/dotnet-core/api"
+
+
+[[servers.routes]]
+location = "/termux"
+proxy_pass = "https://termux.net"

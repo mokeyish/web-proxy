@@ -60,12 +60,23 @@ impl WebProxyService {
         let url = format!("{}{}", route.proxy_pass, path);
 
         let mut headers: Headers = Headers::new();
-        let cached_path = if let Some(ref root_cache_path) = self.server_conf.cached {
+        let mut cached_path = if let Some(ref root_cache_path) = self.server_conf.cached {
             let url = Url::from_str(route.proxy_pass.as_str()).unwrap();
-            let cached_path = PathBuf::from_iter([root_cache_path.as_str(),  format!("{}@{}", url.host().unwrap(), url.port().unwrap_or(80)).as_str(), req.path().trim_left_matches("/")].iter());
-            if cached_path.exists() && cached_path.is_file() {
-                let last_modify: DateTime<Utc> = DateTime::from(fs::metadata(cached_path.as_path()).unwrap().modified().unwrap());
-                headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
+            let mut cached_path = PathBuf::from_iter([root_cache_path.as_str(),  format!("{}@{}", url.host().unwrap(), url.port().unwrap_or(80)).as_str(), req.path().trim_left_matches("/")].iter());
+            if cached_path.exists(){
+                if cached_path.is_dir() {
+                    for index in route.index.as_ref().unwrap_or(&default_files()) {
+                        cached_path.push(index);
+                        if cached_path.is_file() {
+                            break;
+                        }
+                        cached_path.pop();
+                    }
+                }
+                if cached_path.is_file() {
+                    let last_modify: DateTime<Utc> = DateTime::from(fs::metadata(cached_path.as_path()).unwrap().modified().unwrap());
+                    headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
+                }
             }
             Some(cached_path)
         } else {
@@ -128,12 +139,19 @@ impl WebProxyService {
                             }
                         };
 
-                        if let Some(ref cached_path) = cached_path {
+                        if let Some(ref mut cached_path) = cached_path {
                             // Last-Modified
                             // If-Modified-Since
                             if let Some(t) = res.headers().get_raw("Last-Modified") {
                                 let last_modified = String::from_utf8(t.one().unwrap().to_vec()).unwrap();
                                 let last_modified = HttpDate::from_str(last_modified.as_str()).ok().and_then(|x|Some(SystemTime::from(x))).unwrap();
+
+                                if let Some(content_type) = res.headers().get_raw("Content-Type") {
+                                    let content_type = String::from_utf8(content_type.one().unwrap().to_vec()).unwrap();
+                                    if content_type.contains("text/html") && !url.ends_with(".html") && !url.ends_with(".htm") {
+                                        cached_path.push("index.html");
+                                    }
+                                }
 
                                 write_to_file(cached_path.as_path(), last_modified, data.as_ref());
                             }
@@ -165,6 +183,7 @@ impl WebProxyService {
                     location: "/@".to_string(),
                     proxy_pass: dst,
                     text_replace: None,
+                    index: None
                 };
                 println!("{:?}", route);
                 return self.handle_route(req, &route);
@@ -196,6 +215,7 @@ impl Service for WebProxyService {
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
+        println!("origin path:{}", req.path());
         Box::new(futures::future::ok(self.handle(req)))
     }
 }
@@ -242,6 +262,7 @@ struct ServerConf {
 struct RouteConf {
     location: String,
     proxy_pass: String,
+    index: Option<Vec<String>>,
     text_replace: Option<Vec<[String;2]>>,
 }
 
@@ -268,6 +289,10 @@ fn load_config() -> RootConf {
         }
         Some(root_conf)
     }).expect("parse config error.")
+}
+
+fn default_files() -> Vec<String> {
+    vec!["index.html".to_string()]
 }
 
 fn main() {
