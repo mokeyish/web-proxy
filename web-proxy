@@ -1,15 +1,28 @@
 http_proxy = "http://127.0.0.1:50173"
 https_proxy = "http://127.0.0.1:50173"
-
 [[servers]]
 listen = "127.0.0.1:3000"
+cached = "./cache"
+replace_base_url = "http://127.0.0.1:3000"
 
 [[servers.routes]]
-location = "rust-static"
+location = "/rust-static"
 proxy_pass = "https://mirrors.ustc.edu.cn/rust-static"
-cached = "cache/rust-static"
 
 [[servers.routes]]
-location = "npm"
+location = "/npm"
 proxy_pass = "https://registry.npm.taobao.org"
-cached = "cache/mpn"
+
+[[servers.routes]]
+location = "/nuget"
+proxy_pass = "https://api.nuget.org"
+cached = "cache/nuget"
+text_replace = [["https://api-v2v3search-sea.nuget.org/query", "http://127.0.0.1:3000/nuget/v3/query"]]
+
+[[servers.routes]]
+location = "/nuget/v3/query"
+proxy_pass = "https://api-v2v3search-ea.nuget.org/query"
+
+[[servers.routes]]
+location = "/nuget/dotnet-core"
+proxy_pass = "https://dotnet.myget.org/F/dotnet-core/api"
