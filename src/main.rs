@@ -143,7 +143,7 @@ impl WebProxyService {
                                         tmp = a_href.replace_all(tmp.as_str(), |x: &Captures| {
                                             let all = x.name("a").unwrap();
                                             let mut replace = all.as_str().to_string();
-                                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path());
+                                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
                                             replace
                                         }).to_string();
                                     }
