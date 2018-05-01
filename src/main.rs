@@ -128,7 +128,6 @@ impl WebProxyService {
         let url = Url::from_str(route.proxy_pass.as_str()).unwrap();
 
         let mut from = get_without_schema(&url);
-        ;
 
         let to = if let Some(port) = host.port() {
             format!("{}:{}{}", host.hostname(), port, route.location)
@@ -220,7 +219,13 @@ impl WebProxyService {
         let mut headers: Headers = Headers::new();
         let mut cached_path = if let Some(ref root_cache_path) = self.server_conf.cached {
             let url = Url::from_str(route.proxy_pass.as_str()).unwrap();
-            let mut cached_path = PathBuf::from_iter([root_cache_path.as_str(), format!("{}@{}", url.host().unwrap(), url.port().unwrap_or(80)).as_str(), req.path().trim_left_matches("/")].iter());
+            let mut cached_path = PathBuf::from_iter([root_cache_path.as_str(), format!("{}@{}", url.host().unwrap(), url.port().unwrap_or(80)).as_str(), {
+                if req.path().starts_with(BASE_PROXY) {
+                    url.path().trim_matches('/')
+                } else {
+                    req.path().trim_left_matches('/')
+                }
+            }].iter());
             if cached_path.exists() {
                 if cached_path.is_dir() {
                     for index in route.index.as_ref().unwrap_or(&default_files()) {
@@ -236,6 +241,7 @@ impl WebProxyService {
                     headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
                 }
             }
+            println!("缓存路径:{:?}", cached_path);
             Some(cached_path)
         } else {
             None
