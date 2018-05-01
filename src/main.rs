@@ -24,6 +24,7 @@ mod conf;
 use conf::{ServerConf, RouteConf};
 
 
+use reqwest::RedirectPolicy;
 use futures::future::Future;
 use base64::{encode, decode};
 use hyper::{StatusCode};
@@ -46,7 +47,7 @@ use std::iter::FromIterator;
 lazy_static! {
 static ref URL_REGEX: Regex = Regex::new(r#"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[^\s"\\]*|/?))"#).unwrap();
 
-static ref  A_HREF: Regex = Regex::new(r#"(?P<a><a\s+(?:[^>]*?\s+)?href=["'](?P<absolute_path>/(.*?))["']>.+</a>)"#).unwrap();
+static ref  A_ABSOLUTE_HREF: Regex = Regex::new(r#"(?P<a><a\s+(?:[^>]*?\s+)?href=["'](?P<absolute_path>/(.*?))["']>.+</a>)"#).unwrap();
 }
 
 
@@ -85,8 +86,42 @@ impl WebProxyService {
         file.read_to_end(&mut data).unwrap();
         let mime = cached_path.extension().and_then(|x|Some(mime_types::get_mime_type(x.to_str().unwrap_or(".")))).unwrap_or(mime::APPLICATION_OCTET_STREAM);
         headers.set_raw("Content-Type", mime.to_string());
+        headers.set_raw("Connection", "close");
         headers.set(ContentLength(data.len() as u64));
+        headers.remove_raw("Set-Cookie");
         Response::new().with_headers(headers).with_body(data)
+    }
+
+    fn replace_url(&self, req: &Request, route: &RouteConf, data: String) -> String {
+        let host = req.headers().get::<Host>().unwrap();
+
+
+        let get_without_schema = |u: &Url| format!("{}{}{}", u.host().and_then(|x| Some(x.to_string())).unwrap_or("".to_string()), u.port().and_then(|x| Some(x.to_string())).unwrap_or("".to_string()) ,u.path());
+
+        let url = Url::from_str(route.proxy_pass.as_str()).unwrap();
+
+        let mut from = get_without_schema(&url);;
+
+        let to = if let Some(port) = host.port() {
+            format!("{}:{}{}", host.hostname(), port, route.location)
+        } else {
+            format!("{}{}", host.hostname(), route.location)
+        };
+        if !to.ends_with('/') && from.ends_with('/') {
+            let index = from.len() - 1;
+            from.remove(index);
+        }
+
+        println!("解析的proxy_pass{:?}", from);
+        URL_REGEX.replace(data.as_str(), |x: &Captures| {
+            let all = x.name("url").unwrap();
+            let url1 = Url::from_str(all.as_str()).unwrap();
+            if get_without_schema(&url1).starts_with(from.as_str())  {
+                return  all.as_str().replace(from.as_str(), to.as_str())
+            }
+
+            all.as_str().to_string()
+        }).to_string()
     }
 
     fn replace_text(&self, req: Request, res: &reqwest::Response, route: &RouteConf, data: Vec<u8>) -> Vec<u8> {
@@ -107,9 +142,12 @@ impl WebProxyService {
                     let url_regex: &Regex = &URL_REGEX;
                     // replace all url
                     if let Some(base_url) = &self.server_conf.replace_base_url {
+
                         tmp = url_regex.replace_all(tmp.as_str(), |caps: &Captures|format!("{}/@?proxy={}", base_url, encode(&caps["url"]))).to_string();
-                        let a_href: &Regex = &A_HREF;
-                        tmp = a_href.replace_all(tmp.as_str(), |x: &Captures| {
+
+                        // replace absolution
+                        let a_absolution_href: &Regex = &A_ABSOLUTE_HREF;
+                        tmp = a_absolution_href.replace_all(tmp.as_str(), |x: &Captures| {
                             let all = x.name("a").unwrap();
                             let mut replace = all.as_str().to_string();
                             replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
@@ -122,6 +160,13 @@ impl WebProxyService {
             }
         }
         data
+    }
+
+    fn send_message(&self, msg: String) -> Response {
+        let mut headers = Headers::new();
+        headers.set_raw("Content-Type ", "text/plain; charset=utf8");
+//                headers.set(ContentLength(msg.len() as u64));
+        Response::new().with_headers(headers).with_body(msg)
     }
 
     fn handle_route(&self, req: Request, route: &RouteConf) -> Response {
@@ -164,13 +209,23 @@ impl WebProxyService {
         for p in &self.proxies {
             client_builder.proxy(p.clone());
         }
-        match client_builder.build().unwrap().get(url.as_str()).headers(headers).send() {
+        match client_builder.redirect(RedirectPolicy::none()).build().unwrap().get(url.as_str()).headers(headers).send() {
             Ok(mut res) => {
                 println!("proxy_pass:Path: {}", res.url().as_str());
                 println!("proxy_pass:Status: {}", res.status());
                 println!("proxy_pass:Headers:\n{}", res.headers());
                 match res.status() {
                     StatusCode::NotModified => self.read_from_cache(cached_path.unwrap(), res.headers().clone()),
+                    StatusCode::MovedPermanently => {
+                        if let Some(location) = res.headers().get_raw("Location") {
+                            let location = self.replace_url(&req, route, String::from_utf8(location.one().unwrap().to_vec()).unwrap());
+                            let mut headers: Headers = Headers::new();
+                            headers.set_raw("Location", location);
+                            Response::new().with_headers(headers).with_status(StatusCode::MovedPermanently)
+                        } else {
+                            self.send_message("redirect".to_string())
+                        }
+                    },
                     StatusCode::Ok => {
                         println!("read from http body");
                         let mut data = Vec::new();
@@ -197,7 +252,7 @@ impl WebProxyService {
                             }
                         };
                         let mut headers: Headers = res.headers().clone();
-                        headers.set(ContentLength(data.len() as u64)); // Transfer-Encoding
+//                        headers.set(ContentLength(data.len() as u64)); // Transfer-Encoding
                         headers.remove_raw("Transfer-Encoding");
                         Response::new().with_headers(headers).with_body(data)
                     },
@@ -213,8 +268,7 @@ impl WebProxyService {
                     }
 
                 }
-                let mut msg = e.to_string();
-                Response::new().with_header(ContentLength(msg.len() as u64)).with_body(msg)
+                self.send_message(e.to_string())
             }
         }
 
@@ -245,8 +299,7 @@ impl WebProxyService {
         }
 
         // proxy others
-        let msg = format!("others ");
-        Response::new().with_header(ContentLength(msg.len() as u64)).with_body(msg)
+        self.send_message(format!("others "))
     }
 }
 
@@ -261,6 +314,7 @@ impl Service for WebProxyService {
 
     fn call(&self, req: Request) -> Self::Future {
         println!("origin path:{}", req.path());
+        println!("origin headers:{}", req.headers());
         Box::new(futures::future::ok(self.handle(req)))
     }
 }
