@@ -135,11 +135,12 @@ impl WebProxyService {
                             tmp = tmp.replace(i[0].as_str(), i[1].as_str());
                         }
                     }
-                    let host = req.headers().get::<Host>().unwrap();
-                    let from = route.proxy_pass.as_str();
-                    let to = format!("http://{}:{}/{}", host.hostname(), host.port().unwrap_or(80), route.location);
-                    tmp = tmp.replace(from, to.as_str());
+
+                    tmp = self.replace_url(&req, route, tmp);
+
+
                     let url_regex: &Regex = &URL_REGEX;
+
                     // replace all url
                     if let Some(base_url) = &self.server_conf.replace_base_url {
 
@@ -147,6 +148,7 @@ impl WebProxyService {
 
                         // replace absolution
                         let a_absolution_href: &Regex = &A_ABSOLUTE_HREF;
+
                         tmp = a_absolution_href.replace_all(tmp.as_str(), |x: &Captures| {
                             let all = x.name("a").unwrap();
                             let mut replace = all.as_str().to_string();
