@@ -13,10 +13,13 @@ extern crate url;
 extern crate regex;
 extern crate base64;
 extern crate mime;
+extern crate env_logger;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 
 mod mime_types;
 mod conf;
@@ -78,7 +81,7 @@ impl WebProxyService {
     }
 
     fn read_from_cache(&self, cached_path: PathBuf, mut headers: Headers) -> Response {
-        println!("read from cache");
+        info!("read from cache");
         let display = cached_path.display().to_string();
         let mut file = match File::open(cached_path.as_path()) {
             Err(why) => panic!("couldn't open {}: {}", display, why.description()),
@@ -169,7 +172,7 @@ impl WebProxyService {
                     tmp = self.replace_url(&req, route, tmp);
 
                     // replace all url
-                    println!("replace <a> absolute path");
+                    info!("replace <a> absolute path");
                     tmp = A_ABSOLUTE_HREF.replace_all(tmp.as_str(), |x: &Captures| {
                         let all = x.name("a").unwrap();
                         let mut replace = all.as_str().to_string();
@@ -177,7 +180,7 @@ impl WebProxyService {
                         replace
                     }).to_string();
 
-                    println!("replace <img> absolute path");
+                    info!("replace <img> absolute path");
                     tmp = IMG_ABSOLUTE_HREF.replace_all(tmp.as_str(), |x: &Captures| {
                         let all = x.name("img").unwrap();
                         let mut replace = all.as_str().to_string();
@@ -240,7 +243,7 @@ impl WebProxyService {
                     headers.set_raw("If-Modified-Since", last_modify.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
                 }
             }
-            println!("缓存路径:{:?}", cached_path);
+            info!("缓存路径:{:?}", cached_path);
             Some(cached_path)
         } else {
             None
@@ -253,15 +256,15 @@ impl WebProxyService {
         }
         match client_builder.redirect(RedirectPolicy::none()).build().unwrap().get(url.as_str()).headers(headers).send() {
             Ok(mut res) => {
-                println!("proxy_pass:Path: {}", res.url().as_str());
-                println!("proxy_pass:Status: {}", res.status());
-                println!("proxy_pass:Headers:\n{}", res.headers());
+                info!("proxy_pass:Path: {}", res.url().as_str());
+                info!("proxy_pass:Status: {}", res.status());
+                info!("proxy_pass:Headers:\n{}", res.headers());
                 match res.status() {
                     StatusCode::NotModified => self.read_from_cache(cached_path.unwrap(), res.headers().clone()),
                     StatusCode::MovedPermanently | StatusCode::Found => {
                         if let Some(location) = res.headers().get_raw("Location") {
                             let location = self.replace_url(&req, route, String::from_utf8(location.one().unwrap().to_vec()).unwrap());
-                            println!("redirect to : {}", location);
+                            info!("redirect to : {}", location);
                             let mut headers: Headers = Headers::new();
                             headers.set_raw("Location", location);
                             Response::new().with_headers(headers).with_status(res.status())
@@ -270,7 +273,7 @@ impl WebProxyService {
                         }
                     }
                     StatusCode::Ok => {
-                        println!("read from http body");
+                        info!("read from http body");
                         let mut data = Vec::new();
                         res.copy_to(&mut data).unwrap();
 
@@ -324,7 +327,7 @@ impl WebProxyService {
                 text_replace: None,
                 index: None,
             };
-            println!("{:?}", route);
+            info!("{:?}", route);
             return self.handle_route(req, &route);
         }
 
@@ -350,8 +353,8 @@ impl Service for WebProxyService {
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        println!("origin path:{}", req.path());
-        println!("origin headers:{}", req.headers());
+        info!("origin path:{}", req.path());
+        info!("origin headers:{}", req.headers());
         Box::new(futures::future::ok(self.handle(req)))
     }
 }
@@ -362,9 +365,10 @@ fn default_files() -> Vec<String> {
 }
 
 fn main() {
+    env_logger::init();
     let conf = conf::load_config();
     if conf.servers.len() != 1 {
-        println!("currently just support one server.");
+        warn!("currently just support one server.");
         return;
     }
     let mut server_conf: ServerConf = conf.servers.get(0).unwrap().clone();
@@ -388,7 +392,7 @@ fn main() {
             proxies,
         })
     }).unwrap();
-    println!("listening on {}", address);
+    info!("listening on {}", address);
     server.run().unwrap();
 }
 
