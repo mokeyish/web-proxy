@@ -95,7 +95,6 @@ impl WebProxyService {
     fn replace_url(&self, req: &Request, route: &RouteConf, data: String) -> String {
         let host = req.headers().get::<Host>().unwrap();
 
-
         let get_without_schema = |u: &Url| format!("{}{}{}", u.host().and_then(|x| Some(x.to_string())).unwrap_or("".to_string()), u.port().and_then(|x| Some(x.to_string())).unwrap_or("".to_string()) ,u.path());
 
         let url = Url::from_str(route.proxy_pass.as_str()).unwrap();
@@ -112,12 +111,12 @@ impl WebProxyService {
             from.remove(index);
         }
 
-        println!("解析的proxy_pass{:?}", from);
         URL_REGEX.replace(data.as_str(), |x: &Captures| {
             let all = x.name("url").unwrap();
             let url1 = Url::from_str(all.as_str()).unwrap();
             if get_without_schema(&url1).starts_with(from.as_str())  {
-                return  all.as_str().replace(from.as_str(), to.as_str())
+                // currently support http only.
+                return  all.as_str().replace(format!("{}://{}", url1.scheme(),from).as_str(), format!("http://{}", to).as_str())
             }
 
             all.as_str().to_string()
@@ -221,6 +220,7 @@ impl WebProxyService {
                     StatusCode::MovedPermanently => {
                         if let Some(location) = res.headers().get_raw("Location") {
                             let location = self.replace_url(&req, route, String::from_utf8(location.one().unwrap().to_vec()).unwrap());
+                            println!("redirect to : {}", location);
                             let mut headers: Headers = Headers::new();
                             headers.set_raw("Location", location);
                             Response::new().with_headers(headers).with_status(StatusCode::MovedPermanently)
