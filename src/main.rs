@@ -26,7 +26,6 @@ use conf::{ServerConf, RouteConf};
 
 use reqwest::RedirectPolicy;
 use futures::future::Future;
-use base64::{encode_config, decode_config, URL_SAFE};
 use hyper::StatusCode;
 use url::Url;
 use hyper::server::{Http, Request, Response, Service};
@@ -97,9 +96,9 @@ impl WebProxyService {
 
     fn encode_url(&self, base_url: &str, src_url: &str, query: Option<&str>) -> String {
         let mut url = if src_url.ends_with('/') {
-            format!("{}{}/{}/", base_url, BASE_PROXY, encode_config(src_url.trim_right_matches('/'), URL_SAFE))
+            format!("{}{}/{}/", base_url, BASE_PROXY, base64::encode_config(src_url.trim_right_matches('/'), base64::URL_SAFE))
         } else {
-            format!("{}{}/{}", base_url, BASE_PROXY, encode_config(src_url, URL_SAFE))
+            format!("{}{}/{}", base_url, BASE_PROXY, base64::encode_config(src_url, base64::URL_SAFE))
         };
 
         if let Some(query) = query {
@@ -114,9 +113,9 @@ impl WebProxyService {
         let url = &url[start..];
 
         if let Some(i) = url.find('/') {
-            format!("{}/{}", String::from_utf8(decode_config(&url[..i], URL_SAFE).unwrap()).unwrap(), &url[i + 1..])
+            format!("{}/{}", String::from_utf8(base64::decode_config(&url[..i], base64::URL_SAFE).unwrap()).unwrap(), &url[i + 1..])
         } else {
-            format!("{}", String::from_utf8(decode_config(url, URL_SAFE).unwrap()).unwrap())
+            format!("{}", String::from_utf8(base64::decode_config(url, base64::URL_SAFE).unwrap()).unwrap())
         }
     }
 
