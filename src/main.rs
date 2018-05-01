@@ -48,8 +48,11 @@ lazy_static! {
 static ref URL_REGEX: Regex = Regex::new(r#"(?P<url>(?P<schema>[Hh][Tt]{2}[Pp][Ss]?)://(?P<host>((?P<domain>[a-zA-Z0-9\-\.]+[a-zA-Z]{1,10})|(?P<ip>((25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d)))\.){3}(25[0-5]|2[0-4]\d|((1\d{2})|([1-9]?\d))))))(:(?P<port>6[0-5]{2}[0-3][0-5]|[1-5]\d{4}|[1-9]\d{3}|[1-9]\d{2}|[1-9]\d|[0-9]))?(?P<path>/[^\s"\\]*|/?))"#).unwrap();
 
 static ref  A_ABSOLUTE_HREF: Regex = Regex::new(r#"(?P<a><a\s+(?:[^>]*?\s+)?href=["'](?P<absolute_path>/(.*?))["']>.+</a>)"#).unwrap();
+
+static ref  IMG_ABSOLUTE_HREF: Regex = Regex::new(r#"(?P<img><img\s+(?:[^>]*?\s+)?src=["'](?P<absolute_path>/(.*?))["']>)"#).unwrap();
 }
 
+const BASE_PROXY: &'static str = "/@/proxy";
 
 struct WebProxyService {
     server_conf: ServerConf,
@@ -92,6 +95,31 @@ impl WebProxyService {
         Response::new().with_headers(headers).with_body(data)
     }
 
+    fn encode_url(&self, base_url: &str, src_url:&str, query: Option<&str>) -> String {
+        let mut url = if src_url.ends_with('/') {
+            format!("{}{}/{}/", base_url, BASE_PROXY, encode(src_url.trim_right_matches('/')))
+        } else {
+            format!("{}{}/{}", base_url, BASE_PROXY, encode(src_url))
+        };
+
+        if let Some(query) = query {
+            url.push_str("?");
+            url.push_str(query);
+        }
+        url
+    }
+
+    fn decode_url(&self, url: &str) -> String {
+        let start = BASE_PROXY.len() + 1;
+        let url = &url[start..];
+
+        if let Some(i) = url.find('/') {
+            format!("{}/{}", String::from_utf8(decode(&url[..i]).unwrap()).unwrap(), &url[i+1 ..])
+        } else {
+            format!("{}", String::from_utf8(decode(url).unwrap()).unwrap())
+        }
+    }
+
     fn replace_url(&self, req: &Request, route: &RouteConf, data: String) -> String {
         let host = req.headers().get::<Host>().unwrap();
 
@@ -116,10 +144,14 @@ impl WebProxyService {
             let url1 = Url::from_str(all.as_str()).unwrap();
             if get_without_schema(&url1).starts_with(from.as_str())  {
                 // currently support http only.
-                return  all.as_str().replace(format!("{}://{}", url1.scheme(),from).as_str(), format!("http://{}", to).as_str())
+                return  all.as_str().replace(format!("{}://{}", url1.scheme(),from).as_str(), format!("http://{}", to).as_str());
             }
 
-            all.as_str().to_string()
+            if let Some(base_url) = self.server_conf.replace_base_url.as_ref() {
+                self.encode_url(base_url, all.as_str(), req.query())
+            } else {
+                all.as_str().to_string()
+            }
         }).to_string()
     }
 
@@ -127,7 +159,7 @@ impl WebProxyService {
         if let Some(content_type) = res.headers().get_raw("Content-Type") {
             let content_type = String::from_utf8(content_type.one().unwrap().to_vec()).unwrap();
             if let Some(ref mime_types) = self.server_conf.url_replace_mime {
-                if mime_types.iter().any(|x| x  == &content_type) {
+                if mime_types.iter().any(|x| content_type.starts_with(x)) {
                     let mut tmp = String::from_utf8(data).unwrap();
                     if let Some(ref replaces) = route.text_replace {
                         for i in replaces {
@@ -137,24 +169,22 @@ impl WebProxyService {
 
                     tmp = self.replace_url(&req, route, tmp);
 
-
-                    let url_regex: &Regex = &URL_REGEX;
-
                     // replace all url
-                    if let Some(base_url) = &self.server_conf.replace_base_url {
+                    println!("replace <a> absolute path");
+                    tmp = A_ABSOLUTE_HREF.replace_all(tmp.as_str(), |x: &Captures| {
+                        let all = x.name("a").unwrap();
+                        let mut replace = all.as_str().to_string();
+                        replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
+                        replace
+                    }).to_string();
 
-                        tmp = url_regex.replace_all(tmp.as_str(), |caps: &Captures|format!("{}/@?proxy={}", base_url, encode(&caps["url"]))).to_string();
-
-                        // replace absolution
-                        let a_absolution_href: &Regex = &A_ABSOLUTE_HREF;
-
-                        tmp = a_absolution_href.replace_all(tmp.as_str(), |x: &Captures| {
-                            let all = x.name("a").unwrap();
-                            let mut replace = all.as_str().to_string();
-                            replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
-                            replace
-                        }).to_string();
-                    }
+                    println!("replace <img> absolute path");
+                    tmp = IMG_ABSOLUTE_HREF.replace_all(tmp.as_str(), |x: &Captures| {
+                        let all = x.name("img").unwrap();
+                        let mut replace = all.as_str().to_string();
+                        replace.insert_str(x.name("absolute_path").unwrap().start() - all.start() ,req.path().trim_right_matches('/'));
+                        replace
+                    }).to_string();
 
                     return  tmp.into_bytes();
                 }
@@ -173,7 +203,12 @@ impl WebProxyService {
     fn handle_route(&self, req: Request, route: &RouteConf) -> Response {
         // text resource application/xml
         // binary resource application/x-tar
-        let mut path = req.path().to_string()[route.location.len()..].to_string();
+        let mut path = if req.path().starts_with(BASE_PROXY) {
+            String::new()
+        } else {
+            req.path().to_string()[route.location.len()..].to_string()
+        };
+
         if let Some(query) = req.query() {
             path.push_str("?");
             path.push_str(query);
@@ -217,13 +252,13 @@ impl WebProxyService {
                 println!("proxy_pass:Headers:\n{}", res.headers());
                 match res.status() {
                     StatusCode::NotModified => self.read_from_cache(cached_path.unwrap(), res.headers().clone()),
-                    StatusCode::MovedPermanently => {
+                    StatusCode::MovedPermanently | StatusCode::Found=> {
                         if let Some(location) = res.headers().get_raw("Location") {
                             let location = self.replace_url(&req, route, String::from_utf8(location.one().unwrap().to_vec()).unwrap());
                             println!("redirect to : {}", location);
                             let mut headers: Headers = Headers::new();
                             headers.set_raw("Location", location);
-                            Response::new().with_headers(headers).with_status(StatusCode::MovedPermanently)
+                            Response::new().with_headers(headers).with_status(res.status())
                         } else {
                             self.send_message("redirect".to_string())
                         }
@@ -259,7 +294,7 @@ impl WebProxyService {
                         Response::new().with_headers(headers).with_body(data)
                     },
                     StatusCode::NotFound =>Response::new().with_status(StatusCode::NotFound),
-                    _ => panic!("Unknown error")
+                    _ => panic!("Unknown error{}", res.status())
                 }
             }
             Err(e) => {
@@ -277,20 +312,16 @@ impl WebProxyService {
     }
 
     fn handle(&self, req: Request) -> Response {
-        if req.path() == "/@" && req.query().is_some() {
-            let query_str = req.query().unwrap().to_string();
-            let queries: Vec<&str> = query_str.split('&').collect();
-            if queries.len() == 1 && queries[0].starts_with("proxy=") {
-                let dst = String::from_utf8(decode(&queries[0][6..]).unwrap()).unwrap();
-                let route = RouteConf{
-                    location: "/@".to_string(),
-                    proxy_pass: dst,
-                    text_replace: None,
-                    index: None
-                };
-                println!("{:?}", route);
-                return self.handle_route(req, &route);
-            }
+        if req.path().starts_with(BASE_PROXY) {
+            let dst = self.decode_url(req.path());
+            let route = RouteConf{
+                location: BASE_PROXY.to_string(),
+                proxy_pass: dst,
+                text_replace: None,
+                index: None
+            };
+            println!("{:?}", route);
+            return self.handle_route(req, &route);
         }
 
         for route in &self.server_conf.routes {
